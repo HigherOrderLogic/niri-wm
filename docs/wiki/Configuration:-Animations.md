@@ -84,12 +84,22 @@ animations {
 }
 ```
 
-Currently, niri only supports four curves:
+Currently, niri only supports five curves:
 
 - `ease-out-quad` <sup>Since: 0.1.5</sup>
 - `ease-out-cubic`
 - `ease-out-expo`
 - `linear` <sup>Since: 0.1.6</sup>
+- `cubic-bezier` <sup>Since: next release</sup>
+    A custom [cubic Bézier curve](https://www.w3.org/TR/css-easing-1/#cubic-bezier-easing-functions). You need to set 4 numbers defining the control points of the curve, for example:
+    ```kdl
+    animations {
+        window-open {
+            curve "cubic-bezier" 0.05 0.7 0.1 1
+        }
+    }
+    ```
+    You can get a visualisation for them on [cubic-bezier.com](https://cubic-bezier.com/).
 
 You can get a feel for them on pages like [easings.net](https://easings.net/).
 
