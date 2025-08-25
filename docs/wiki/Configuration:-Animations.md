@@ -84,7 +84,8 @@ animations {
 }
 ```
 
-Currently, niri only supports five curves:
+Currently, niri only supports five curves.
+You can get a feel for them on pages like [easings.net](https://easings.net/).
 
 - `ease-out-quad` <sup>Since: 0.1.5</sup>
 - `ease-out-cubic`
@@ -99,9 +100,7 @@ Currently, niri only supports five curves:
         }
     }
     ```
-    You can get a visualisation for them on [cubic-bezier.com](https://cubic-bezier.com/).
-
-You can get a feel for them on pages like [easings.net](https://easings.net/).
+    You can tweak the cubic-bezier parameters on pages like [easings.co](https://easings.co?curve=0.05,0.7,0.1,1).
 
 #### Spring
 
