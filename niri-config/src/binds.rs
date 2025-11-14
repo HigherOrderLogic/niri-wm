@@ -65,6 +65,42 @@ bitflags! {
     }
 }
 
+impl FromStr for Modifiers {
+    type Err = miette::Error;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let split = s.split('+');
+        let mut modifiers = Self::empty();
+
+        for part in split {
+            let part = part.trim();
+            if part.eq_ignore_ascii_case("mod") {
+                modifiers |= Modifiers::COMPOSITOR
+            } else if part.eq_ignore_ascii_case("ctrl") || part.eq_ignore_ascii_case("control") {
+                modifiers |= Modifiers::CTRL;
+            } else if part.eq_ignore_ascii_case("shift") {
+                modifiers |= Modifiers::SHIFT;
+            } else if part.eq_ignore_ascii_case("alt") {
+                modifiers |= Modifiers::ALT;
+            } else if part.eq_ignore_ascii_case("super") || part.eq_ignore_ascii_case("win") {
+                modifiers |= Modifiers::SUPER;
+            } else if part.eq_ignore_ascii_case("iso_level3_shift")
+                || part.eq_ignore_ascii_case("mod5")
+            {
+                modifiers |= Modifiers::ISO_LEVEL3_SHIFT;
+            } else if part.eq_ignore_ascii_case("iso_level5_shift")
+                || part.eq_ignore_ascii_case("mod3")
+            {
+                modifiers |= Modifiers::ISO_LEVEL5_SHIFT;
+            } else {
+                return Err(miette!("invalid modifier: {part}"));
+            }
+        }
+
+        Ok(modifiers)
+    }
+}
+
 #[derive(knuffel::Decode, Debug, Default, Clone, PartialEq)]
 pub struct SwitchBinds {
     #[knuffel(child)]
@@ -927,35 +963,13 @@ impl FromStr for Key {
     type Err = miette::Error;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let mut modifiers = Modifiers::empty();
-
-        let mut split = s.split('+');
-        let key = split.next_back().unwrap();
-
-        for part in split {
-            let part = part.trim();
-            if part.eq_ignore_ascii_case("mod") {
-                modifiers |= Modifiers::COMPOSITOR
-            } else if part.eq_ignore_ascii_case("ctrl") || part.eq_ignore_ascii_case("control") {
-                modifiers |= Modifiers::CTRL;
-            } else if part.eq_ignore_ascii_case("shift") {
-                modifiers |= Modifiers::SHIFT;
-            } else if part.eq_ignore_ascii_case("alt") {
-                modifiers |= Modifiers::ALT;
-            } else if part.eq_ignore_ascii_case("super") || part.eq_ignore_ascii_case("win") {
-                modifiers |= Modifiers::SUPER;
-            } else if part.eq_ignore_ascii_case("iso_level3_shift")
-                || part.eq_ignore_ascii_case("mod5")
-            {
-                modifiers |= Modifiers::ISO_LEVEL3_SHIFT;
-            } else if part.eq_ignore_ascii_case("iso_level5_shift")
-                || part.eq_ignore_ascii_case("mod3")
-            {
-                modifiers |= Modifiers::ISO_LEVEL5_SHIFT;
-            } else {
-                return Err(miette!("invalid modifier: {part}"));
-            }
-        }
+        let mut split = s.rsplitn(2, '+');
+        let key = split.next().unwrap();
+        let modifiers = if let Some(s) = split.next() {
+            s.parse()?
+        } else {
+            Modifiers::empty()
+        };
 
         let trigger = if key.eq_ignore_ascii_case("MouseLeft") {
             Trigger::MouseLeft
