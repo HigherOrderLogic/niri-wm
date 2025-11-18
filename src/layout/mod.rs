@@ -602,7 +602,7 @@ impl Options {
         Self {
             layout: config.layout.clone(),
             animations: config.animations.clone(),
-            gestures: config.gestures,
+            gestures: config.gestures.clone(),
             overview: config.overview,
             disable_resize_throttling: config.debug.disable_resize_throttling,
             disable_transactions: config.debug.disable_transactions,

@@ -773,6 +773,14 @@ mod tests {
                     trigger-width 10
                     max-speed 50
                 }
+
+                binds {
+                    _3-SwipeUp { toggle-overview; }
+                    _4-SwipeVertical { spawn-sh "fuzzel"; }
+
+                    Mod+PinchIn { toggle-overview; }
+                    Ctrl+3-SwipeLeft { move-column-left; }
+                }
             }
 
             environment {
@@ -1526,6 +1534,51 @@ mod tests {
                     bottom_left: false,
                     bottom_right: false,
                 },
+                binds: Binds(
+                    [
+                        Bind {
+                            modifiers: Modifiers(
+                                0x0,
+                            ),
+                            gesture: Swipe(
+                                3,
+                                Up,
+                            ),
+                            action: ToggleOverview,
+                        },
+                        Bind {
+                            modifiers: Modifiers(
+                                0x0,
+                            ),
+                            gesture: Swipe(
+                                4,
+                                Vertical,
+                            ),
+                            action: SpawnSh(
+                                "fuzzel",
+                            ),
+                        },
+                        Bind {
+                            modifiers: Modifiers(
+                                COMPOSITOR,
+                            ),
+                            gesture: Pinch(
+                                In,
+                            ),
+                            action: ToggleOverview,
+                        },
+                        Bind {
+                            modifiers: Modifiers(
+                                CTRL,
+                            ),
+                            gesture: Swipe(
+                                3,
+                                Left,
+                            ),
+                            action: MoveColumnLeft,
+                        },
+                    ],
+                ),
             },
             overview: Overview {
                 zoom: 0.5,
