@@ -188,10 +188,7 @@ impl Winit {
         );
 
         // Process any pending image_copy_capture frames.
-        {
-            let renderer = self.backend.renderer();
-            niri.process_image_copy_capture_frames(renderer, output);
-        }
+        self.with_primary_renderer(|r| niri.process_image_copy_capture_frames(r, output));
 
         // Visualize the damage, if enabled.
         if niri.debug_draw_damage {

@@ -493,7 +493,10 @@ pub struct OutputState {
     /// Image copy capture sessions for this output.
     pub image_copy_sessions: Vec<smithay::wayland::image_copy_capture::Session>,
     /// Pending image copy capture frames waiting to be rendered.
-    pub pending_image_copy_frames: Vec<(smithay::wayland::image_copy_capture::SessionRef, smithay::wayland::image_copy_capture::Frame)>,
+    pub pending_image_copy_frames: Vec<(
+        smithay::wayland::image_copy_capture::SessionRef,
+        smithay::wayland::image_copy_capture::Frame,
+    )>,
 }
 
 #[derive(Debug, Default)]
@@ -5150,7 +5153,6 @@ impl Niri {
             let transform = output.current_transform();
 
             let buffer = frame.buffer();
-            
             // Check if buffer is DMABUF or SHM
             if let Ok(dmabuf) = smithay::wayland::dmabuf::get_dmabuf(&buffer) {
                 // Render to DMABUF
@@ -5169,7 +5171,9 @@ impl Niri {
                     }
                     Err(err) => {
                         warn!("error rendering image_copy_capture to dmabuf: {err:?}");
-                        frame.fail(smithay::wayland::image_copy_capture::CaptureFailureReason::Unknown);
+                        frame.fail(
+                            smithay::wayland::image_copy_capture::CaptureFailureReason::Unknown,
+                        );
                     }
                 }
             } else {
@@ -5187,7 +5191,9 @@ impl Niri {
                     }
                     Err(err) => {
                         warn!("error rendering image_copy_capture to shm: {err:?}");
-                        frame.fail(smithay::wayland::image_copy_capture::CaptureFailureReason::Unknown);
+                        frame.fail(
+                            smithay::wayland::image_copy_capture::CaptureFailureReason::Unknown,
+                        );
                     }
                 }
             }

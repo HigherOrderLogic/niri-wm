@@ -1842,11 +1842,7 @@ impl Tty {
         let mut elements =
             niri.render::<TtyRenderer>(&mut renderer, output, true, RenderTarget::Output);
 
-        // Process any pending image_copy_capture frames.
-        // FIXME: TtyRenderer is a MultiRenderer, but image_copy_capture requires GlesRenderer.
-        // Need to extract the underlying GlesRenderer or implement MultiRenderer support.
-        // For now, image_copy_capture frames will be processed on the next successful frame
-        // when using a backend that provides GlesRenderer directly (winit, headless).
+        niri.process_image_copy_capture_frames(renderer.as_gles_renderer(), output);
 
         // Visualize the damage, if enabled.
         if niri.debug_draw_damage {

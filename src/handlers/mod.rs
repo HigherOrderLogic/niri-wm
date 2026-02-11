@@ -888,25 +888,14 @@ impl ToplevelCaptureSourceHandler for State {
         source: ImageCaptureSource,
         toplevel: &ForeignToplevelHandle,
     ) {
-        // Try to find the window by matching the ForeignToplevelHandle identifier
-        // with the foreign_toplevel_list handle stored in window user data
         let mut found_window = None;
-        self.niri
-            .layout
-            .with_windows(|mapped, _output, _workspace_id, _stack_id| {
-                if found_window.is_some() {
-                    return;
-                }
-                if let Some(handle) = mapped
-                    .window
-                    .user_data()
-                    .get::<smithay::wayland::foreign_toplevel_list::ForeignToplevelHandle>(
-                ) {
-                    if handle.identifier() == toplevel.identifier() {
-                        found_window = Some(mapped.window.clone());
-                    }
-                }
-            });
+        self.niri.layout.with_windows(|mapped, _, _, _| {
+            if found_window.is_none()
+                && mapped.id().to_protocol_identifier() == toplevel.identifier()
+            {
+                found_window = Some(mapped.window.clone());
+            }
+        });
 
         if let Some(window) = found_window {
             source

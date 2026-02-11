@@ -1,12 +1,17 @@
+use std::collections::HashMap;
 use std::sync::Mutex;
 
+use smithay::backend::allocator::Fourcc;
+use smithay::backend::egl::EGLDevice;
 use smithay::backend::renderer::damage::OutputDamageTracker;
+use smithay::backend::renderer::gles::{Capability, GlesRenderer};
+use smithay::delegate_image_copy_capture;
 use smithay::reexports::wayland_server::protocol::wl_shm::Format as ShmFormat;
-use smithay::utils::{Size, Transform};
+use smithay::utils::{Buffer, Size, Transform};
 use smithay::wayland::image_capture_source::ImageCaptureSource;
 use smithay::wayland::image_copy_capture::{
-    BufferConstraints, CaptureFailureReason, CursorSession, CursorSessionRef, Frame,
-    ImageCopyCaptureHandler, ImageCopyCaptureState, Session, SessionRef,
+    BufferConstraints, CaptureFailureReason, CursorSession, CursorSessionRef, DmabufConstraints,
+    Frame, ImageCopyCaptureHandler, ImageCopyCaptureState, Session, SessionRef,
 };
 
 use crate::handlers::ImageCaptureSourceKind;
@@ -35,30 +40,19 @@ impl ImageCopyCaptureHandler for State {
 
         match kind {
             ImageCaptureSourceKind::Output(weak) => {
-                let output = weak.upgrade()?;
-                let mode = output.current_mode()?;
-                let size = mode.size.to_logical(1).to_buffer(1, Transform::Normal);
-
-                // Basic SHM formats supported
-                let shm_formats = vec![
-                    ShmFormat::Xrgb8888,
-                    ShmFormat::Argb8888,
-                    ShmFormat::Abgr8888,
-                    ShmFormat::Xbgr8888,
-                ];
-
-                // TODO: Add DMABUF constraints based on renderer capabilities
-                let dma = None;
-
-                Some(BufferConstraints {
-                    size,
-                    shm: shm_formats,
-                    dma,
-                })
+                let size = weak
+                    .upgrade()?
+                    .current_mode()?
+                    .size
+                    .to_logical(1)
+                    .to_buffer(1, Transform::Normal);
+                self.backend
+                    .with_primary_renderer(|renderer| constraints_for_renderer(size, renderer))
             }
-            ImageCaptureSourceKind::Window(_window) => {
-                // Window capture not yet implemented
-                None
+            ImageCaptureSourceKind::Window(window) => {
+                let size = window.geometry().size.to_buffer(1, Transform::Normal);
+                self.backend
+                    .with_primary_renderer(|renderer| constraints_for_renderer(size, renderer))
             }
             ImageCaptureSourceKind::Destroyed => None,
         }
@@ -68,14 +62,10 @@ impl ImageCopyCaptureHandler for State {
         &mut self,
         _source: &ImageCaptureSource,
     ) -> Option<BufferConstraints> {
-        // Standard cursor size
-        let size = Size::from((64, 64));
-
-        Some(BufferConstraints {
-            size,
-            shm: vec![ShmFormat::Argb8888],
-            dma: None,
-        })
+        let cursor_size = self.niri.cursor_manager.cursor_size() as i32;
+        let size = Size::from((cursor_size, cursor_size));
+        self.backend
+            .with_primary_renderer(|renderer| constraints_for_renderer(size, renderer))
     }
 
     fn new_session(&mut self, session: Session) {
@@ -213,5 +203,49 @@ impl ImageCopyCaptureHandler for State {
     }
 }
 
+/// Generate buffer constraints based on renderer capabilities.
+fn constraints_for_renderer(
+    size: Size<i32, Buffer>,
+    renderer: &mut GlesRenderer,
+) -> BufferConstraints {
+    // Start with basic SHM formats
+    let mut shm_formats = vec![
+        ShmFormat::Abgr8888,
+        ShmFormat::Xbgr8888,
+        ShmFormat::Argb8888,
+        ShmFormat::Xrgb8888,
+    ];
+
+    // Check for 10-bit support
+    if renderer.capabilities().contains(&Capability::_10Bit) {
+        shm_formats.extend([ShmFormat::Abgr2101010, ShmFormat::Xbgr2101010]);
+    }
+
+    // Get DMABUF constraints if available
+    let dma = EGLDevice::device_for_display(renderer.egl_context().display())
+        .ok()
+        .and_then(|device| device.try_get_render_node().ok().flatten())
+        .map(|node| {
+            let formats = renderer
+                .egl_context()
+                .dmabuf_render_formats()
+                .iter()
+                .fold(HashMap::<Fourcc, Vec<_>>::new(), |mut map, format| {
+                    map.entry(format.code).or_default().push(format.modifier);
+                    map
+                })
+                .into_iter()
+                .collect();
+
+            DmabufConstraints { node, formats }
+        });
+
+    BufferConstraints {
+        size,
+        shm: shm_formats,
+        dma,
+    }
+}
+
 // Delegate the protocol implementation to smithay
-smithay::delegate_image_copy_capture!(State);
+delegate_image_copy_capture!(State);

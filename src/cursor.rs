@@ -149,6 +149,11 @@ impl CursorManager {
         &self.current_cursor
     }
 
+    /// Get the configured cursor size.
+    pub fn cursor_size(&self) -> u8 {
+        self.size
+    }
+
     /// Set new cursor image provider.
     pub fn set_cursor_image(&mut self, cursor: CursorImageStatus) {
         self.current_cursor = cursor;
