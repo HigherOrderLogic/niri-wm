@@ -490,6 +490,10 @@ pub struct OutputState {
     screen_transition: Option<ScreenTransition>,
     /// Damage tracker used for the debug damage visualization.
     pub debug_damage_tracker: OutputDamageTracker,
+    /// Image copy capture sessions for this output.
+    pub image_copy_sessions: Vec<smithay::wayland::image_copy_capture::Session>,
+    /// Pending image copy capture frames waiting to be rendered.
+    pub pending_image_copy_frames: Vec<(smithay::wayland::image_copy_capture::SessionRef, smithay::wayland::image_copy_capture::Frame)>,
 }
 
 #[derive(Debug, Default)]
@@ -2837,6 +2841,8 @@ impl Niri {
             lock_color_buffer: SolidColorBuffer::new(size, CLEAR_COLOR_LOCKED),
             screen_transition: None,
             debug_damage_tracker: OutputDamageTracker::from_output(&output),
+            image_copy_sessions: Vec::new(),
+            pending_image_copy_frames: Vec::new(),
         };
         let rv = self.output_state.insert(output.clone(), state);
         assert!(rv.is_none(), "output was already tracked");
@@ -5111,6 +5117,81 @@ impl Niri {
         };
 
         Ok((sync, damages))
+    }
+
+    pub fn process_image_copy_capture_frames(
+        &mut self,
+        renderer: &mut GlesRenderer,
+        output: &Output,
+    ) {
+        let _span = tracy_client::span!("Niri::process_image_copy_capture_frames");
+
+        let Some(output_state) = self.output_state.get_mut(output) else {
+            return;
+        };
+
+        // Take pending frames to process
+        let pending_frames = mem::take(&mut output_state.pending_image_copy_frames);
+        if pending_frames.is_empty() {
+            return;
+        }
+
+        // Render elements once for all frames
+        let elements = self.render(renderer, output, false, RenderTarget::ScreenCapture);
+
+        for (_session, frame) in pending_frames {
+            let Some(mode) = output.current_mode() else {
+                frame.fail(smithay::wayland::image_copy_capture::CaptureFailureReason::Unknown);
+                continue;
+            };
+
+            let size = mode.size;
+            let scale = output.current_scale().fractional_scale().into();
+            let transform = output.current_transform();
+
+            let buffer = frame.buffer();
+            
+            // Check if buffer is DMABUF or SHM
+            if let Ok(dmabuf) = smithay::wayland::dmabuf::get_dmabuf(&buffer) {
+                // Render to DMABUF
+                match crate::render_helpers::render_to_dmabuf(
+                    renderer,
+                    dmabuf.clone(),
+                    size,
+                    scale,
+                    transform,
+                    elements.iter().rev(),
+                ) {
+                    Ok(sync) => {
+                        // Wait for rendering to complete
+                        let _ = sync.wait();
+                        frame.success(transform, Vec::new(), crate::utils::get_monotonic_time());
+                    }
+                    Err(err) => {
+                        warn!("error rendering image_copy_capture to dmabuf: {err:?}");
+                        frame.fail(smithay::wayland::image_copy_capture::CaptureFailureReason::Unknown);
+                    }
+                }
+            } else {
+                // Try SHM buffer
+                match crate::render_helpers::render_to_shm(
+                    renderer,
+                    &buffer,
+                    size,
+                    scale,
+                    transform,
+                    elements.iter().rev(),
+                ) {
+                    Ok(()) => {
+                        frame.success(transform, Vec::new(), crate::utils::get_monotonic_time());
+                    }
+                    Err(err) => {
+                        warn!("error rendering image_copy_capture to shm: {err:?}");
+                        frame.fail(smithay::wayland::image_copy_capture::CaptureFailureReason::Unknown);
+                    }
+                }
+            }
+        }
     }
 
     #[cfg(not(feature = "xdp-gnome-screencast"))]

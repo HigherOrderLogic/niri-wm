@@ -1,5 +1,5 @@
 mod compositor;
-mod image_copy_capture;
+pub mod image_copy_capture;
 mod layer_shell;
 mod xdg_shell;
 
@@ -13,11 +13,11 @@ use std::time::Duration;
 use smithay::backend::allocator::dmabuf::Dmabuf;
 use smithay::backend::drm::DrmNode;
 use smithay::backend::input::{InputEvent, TabletToolDescriptor};
-use smithay::desktop::{PopupKind, PopupManager};
+use smithay::desktop::{PopupKind, PopupManager, Window};
 use smithay::input::dnd::{self, DnDGrab, DndGrabHandler, DndTarget};
 use smithay::input::pointer::{CursorIcon, CursorImageStatus, Focus, PointerHandle};
 use smithay::input::{keyboard, Seat, SeatHandler, SeatState};
-use smithay::output::Output;
+use smithay::output::{Output, WeakOutput};
 use smithay::reexports::rustix::fs::{fcntl_setfl, OFlags};
 use smithay::reexports::wayland_protocols_wlr::screencopy::v1::server::zwlr_screencopy_manager_v1::ZwlrScreencopyManagerV1;
 use smithay::reexports::wayland_server::protocol::wl_output::WlOutput;
@@ -846,11 +846,35 @@ delegate_output_management!(State);
 impl MutterX11InteropHandler for State {}
 delegate_mutter_x11_interop!(State);
 
-impl ImageCaptureSourceHandler for State {}
+#[derive(Debug, Clone, PartialEq)]
+pub enum ImageCaptureSourceKind {
+    Output(WeakOutput),
+    Window(Window),
+    Destroyed,
+}
+
+impl ImageCaptureSourceKind {
+    pub fn from_resource(
+        resource: &smithay::reexports::wayland_protocols::ext::image_capture_source::v1::server::ext_image_capture_source_v1::ExtImageCaptureSourceV1,
+    ) -> Option<Self> {
+        let source = ImageCaptureSource::from_resource(resource)?;
+        source.user_data().get::<ImageCaptureSourceKind>().cloned()
+    }
+}
+
+impl ImageCaptureSourceHandler for State {
+    fn source_destroyed(&mut self, _source: ImageCaptureSource) {}
+}
 
 impl OutputCaptureSourceHandler for State {
     fn output_capture_source_state(&mut self) -> &mut OutputCaptureSourceState {
         &mut self.niri.output_capture_source_state
+    }
+
+    fn output_source_created(&mut self, source: ImageCaptureSource, output: &Output) {
+        source
+            .user_data()
+            .insert_if_missing(|| ImageCaptureSourceKind::Output(output.downgrade()));
     }
 }
 
@@ -864,6 +888,36 @@ impl ToplevelCaptureSourceHandler for State {
         source: ImageCaptureSource,
         toplevel: &ForeignToplevelHandle,
     ) {
+        // Try to find the window by matching the ForeignToplevelHandle identifier
+        // with the foreign_toplevel_list handle stored in window user data
+        let mut found_window = None;
+        self.niri
+            .layout
+            .with_windows(|mapped, _output, _workspace_id, _stack_id| {
+                if found_window.is_some() {
+                    return;
+                }
+                if let Some(handle) = mapped
+                    .window
+                    .user_data()
+                    .get::<smithay::wayland::foreign_toplevel_list::ForeignToplevelHandle>(
+                ) {
+                    if handle.identifier() == toplevel.identifier() {
+                        found_window = Some(mapped.window.clone());
+                    }
+                }
+            });
+
+        if let Some(window) = found_window {
+            source
+                .user_data()
+                .insert_if_missing(|| ImageCaptureSourceKind::Window(window));
+        } else {
+            // Window not found, mark as destroyed to gracefully fail
+            source
+                .user_data()
+                .insert_if_missing(|| ImageCaptureSourceKind::Destroyed);
+        }
     }
 }
 
