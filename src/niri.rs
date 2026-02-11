@@ -79,6 +79,10 @@ use smithay::wayland::dmabuf::DmabufState;
 use smithay::wayland::fractional_scale::FractionalScaleManagerState;
 use smithay::wayland::idle_inhibit::IdleInhibitManagerState;
 use smithay::wayland::idle_notify::IdleNotifierState;
+use smithay::wayland::image_capture_source::{
+    ImageCaptureSourceState, OutputCaptureSourceState, ToplevelCaptureSourceState,
+};
+use smithay::wayland::image_copy_capture::ImageCopyCaptureState;
 use smithay::wayland::input_method::InputMethodManagerState;
 use smithay::wayland::keyboard_shortcuts_inhibit::{
     KeyboardShortcutsInhibitState, KeyboardShortcutsInhibitor,
@@ -305,6 +309,10 @@ pub struct Niri {
     pub gamma_control_manager_state: GammaControlManagerState,
     pub activation_state: XdgActivationState,
     pub mutter_x11_interop_state: MutterX11InteropManagerState,
+    pub image_capture_source_state: ImageCaptureSourceState,
+    pub output_capture_source_state: OutputCaptureSourceState,
+    pub toplevel_capture_source_state: ToplevelCaptureSourceState,
+    pub image_copy_capture_state: ImageCopyCaptureState,
 
     // This will not work as is outside of tests, so it is gated with #[cfg(test)] for now. In
     // particular, shaders will need to learn about the single pixel buffer. Also, it must be
@@ -2308,6 +2316,15 @@ impl Niri {
         let mutter_x11_interop_state =
             MutterX11InteropManagerState::new::<State, _>(&display_handle, move |_| true);
 
+        let image_capture_source_state = ImageCaptureSourceState::new();
+
+        let output_capture_source_state = OutputCaptureSourceState::new::<State>(&display_handle);
+
+        let toplevel_capture_source_state =
+            ToplevelCaptureSourceState::new::<State>(&display_handle);
+
+        let image_copy_capture_state = ImageCopyCaptureState::new::<State>(&display_handle);
+
         #[cfg(test)]
         let single_pixel_buffer_state = SinglePixelBufferState::new::<State>(&display_handle);
 
@@ -2500,6 +2517,10 @@ impl Niri {
             gamma_control_manager_state,
             activation_state,
             mutter_x11_interop_state,
+            image_capture_source_state,
+            output_capture_source_state,
+            toplevel_capture_source_state,
+            image_copy_capture_state,
             #[cfg(test)]
             single_pixel_buffer_state,
 

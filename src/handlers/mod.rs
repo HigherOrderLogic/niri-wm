@@ -1,4 +1,5 @@
 mod compositor;
+mod image_copy_capture;
 mod layer_shell;
 mod xdg_shell;
 
@@ -28,9 +29,14 @@ use smithay::wayland::dmabuf::{DmabufGlobal, DmabufHandler, DmabufState, ImportN
 use smithay::wayland::drm_lease::{
     DrmLease, DrmLeaseBuilder, DrmLeaseHandler, DrmLeaseRequest, DrmLeaseState, LeaseRejected,
 };
+use smithay::wayland::foreign_toplevel_list::ForeignToplevelHandle;
 use smithay::wayland::fractional_scale::FractionalScaleHandler;
 use smithay::wayland::idle_inhibit::IdleInhibitHandler;
 use smithay::wayland::idle_notify::{IdleNotifierHandler, IdleNotifierState};
+use smithay::wayland::image_capture_source::{
+    ImageCaptureSource, ImageCaptureSourceHandler, OutputCaptureSourceHandler,
+    OutputCaptureSourceState, ToplevelCaptureSourceHandler, ToplevelCaptureSourceState,
+};
 use smithay::wayland::input_method::{InputMethodHandler, PopupSurface};
 use smithay::wayland::keyboard_shortcuts_inhibit::{
     KeyboardShortcutsInhibitHandler, KeyboardShortcutsInhibitState, KeyboardShortcutsInhibitor,
@@ -63,11 +69,12 @@ use smithay::wayland::xdg_activation::{
 use smithay::{
     delegate_cursor_shape, delegate_data_control, delegate_data_device, delegate_dmabuf,
     delegate_drm_lease, delegate_ext_data_control, delegate_fractional_scale,
-    delegate_idle_inhibit, delegate_idle_notify, delegate_input_method_manager,
-    delegate_keyboard_shortcuts_inhibit, delegate_output, delegate_pointer_constraints,
-    delegate_pointer_gestures, delegate_presentation, delegate_primary_selection,
-    delegate_relative_pointer, delegate_seat, delegate_security_context, delegate_session_lock,
-    delegate_single_pixel_buffer, delegate_tablet_manager, delegate_text_input_manager,
+    delegate_idle_inhibit, delegate_idle_notify, delegate_image_capture_source,
+    delegate_input_method_manager, delegate_keyboard_shortcuts_inhibit, delegate_output,
+    delegate_output_capture_source, delegate_pointer_constraints, delegate_pointer_gestures,
+    delegate_presentation, delegate_primary_selection, delegate_relative_pointer, delegate_seat,
+    delegate_security_context, delegate_session_lock, delegate_single_pixel_buffer,
+    delegate_tablet_manager, delegate_text_input_manager, delegate_toplevel_capture_source,
     delegate_viewporter, delegate_xdg_activation,
 };
 
@@ -838,5 +845,30 @@ delegate_output_management!(State);
 
 impl MutterX11InteropHandler for State {}
 delegate_mutter_x11_interop!(State);
+
+impl ImageCaptureSourceHandler for State {}
+
+impl OutputCaptureSourceHandler for State {
+    fn output_capture_source_state(&mut self) -> &mut OutputCaptureSourceState {
+        &mut self.niri.output_capture_source_state
+    }
+}
+
+impl ToplevelCaptureSourceHandler for State {
+    fn toplevel_capture_source_state(&mut self) -> &mut ToplevelCaptureSourceState {
+        &mut self.niri.toplevel_capture_source_state
+    }
+
+    fn toplevel_source_created(
+        &mut self,
+        source: ImageCaptureSource,
+        toplevel: &ForeignToplevelHandle,
+    ) {
+    }
+}
+
+delegate_image_capture_source!(State);
+delegate_output_capture_source!(State);
+delegate_toplevel_capture_source!(State);
 
 delegate_single_pixel_buffer!(State);
