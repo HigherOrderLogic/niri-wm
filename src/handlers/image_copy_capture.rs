@@ -14,7 +14,7 @@ use smithay::utils::{Buffer, Logical, Point, Scale, Size, Transform};
 use smithay::wayland::image_capture_source::ImageCaptureSource;
 use smithay::wayland::image_copy_capture::{
     BufferConstraints, CaptureFailureReason, CursorSession, CursorSessionRef, DmabufConstraints,
-    Frame, ImageCopyCaptureHandler, ImageCopyCaptureState, Session, SessionRef,
+    Frame, FrameRef, ImageCopyCaptureHandler, ImageCopyCaptureState, Session, SessionRef,
 };
 
 use crate::cursor::RenderCursor;
@@ -457,8 +457,21 @@ impl ImageCopyCaptureHandler for State {
         });
     }
 
-    fn frame_aborted(&mut self, _frame: smithay::wayland::image_copy_capture::FrameRef) {
-        // Frame was aborted, no action needed
+    fn frame_aborted(&mut self, frame: FrameRef) {
+        // Remove the aborted frame from all pending queues to prevent memory leaks
+        // Check all outputs
+        for state in self.niri.output_state.values_mut() {
+            state.pending_image_copy_frames.retain(|(_, f)| f != &frame);
+        }
+
+        // Check all windows
+        self.niri.layout.with_windows(|mapped, _, _, _| {
+            if let Some(state) = mapped.window.user_data().get::<WindowCaptureData>() {
+                if let Ok(mut state) = state.lock() {
+                    state.pending_frames.retain(|(_, f)| f != &frame);
+                }
+            }
+        });
     }
 
     fn session_destroyed(&mut self, session: SessionRef) {
