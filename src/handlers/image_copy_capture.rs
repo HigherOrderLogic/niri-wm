@@ -174,13 +174,39 @@ impl ImageCopyCaptureHandler for State {
             return;
         };
 
-        // Get pointer location
-        let pointer = self.niri.seat.get_pointer();
-        let pointer_loc = pointer
+        // Get pointer location and cursor geometry
+        let pointer_loc = self
+            .niri
+            .seat
+            .get_pointer()
             .as_ref()
             .map(|p| p.current_location().to_i32_round());
 
-        // Set cursor position based on source kind
+        // Calculate cursor hotspot (if cursor is visible)
+        let hotspot: Option<Point<i32, Buffer>> =
+            match self.niri.cursor_manager.get_render_cursor(1) {
+                RenderCursor::Hidden => None,
+                RenderCursor::Surface {
+                    surface: _,
+                    hotspot,
+                } => Some(Point::from((hotspot.x, hotspot.y))),
+                RenderCursor::Named {
+                    icon: _,
+                    scale,
+                    cursor,
+                } => {
+                    use crate::cursor::XCursor;
+                    let (_, image) =
+                        cursor.frame(self.niri.start_time.elapsed().as_millis() as u32);
+                    let image_hotspot = XCursor::hotspot(image);
+                    Some(Point::from((
+                        image_hotspot.x / scale,
+                        image_hotspot.y / scale,
+                    )))
+                }
+            };
+
+        // Set cursor position and hotspot based on source kind
         match kind {
             ImageCaptureSourceKind::Output(weak) => {
                 let Some(output) = weak.upgrade() else {
@@ -209,6 +235,9 @@ impl ImageCopyCaptureHandler for State {
                                 )
                                 .to_i32_round();
 
+                            if let Some(hotspot) = hotspot {
+                                session.set_cursor_hotspot(hotspot);
+                            }
                             session.set_cursor_pos(Some(buffer_pos));
                         }
                     }
@@ -230,6 +259,9 @@ impl ImageCopyCaptureHandler for State {
                         let buffer_pos: Point<i32, Buffer> =
                             Point::from((relative_pos.x as i32, relative_pos.y as i32));
 
+                        if let Some(hotspot) = hotspot {
+                            session.set_cursor_hotspot(hotspot);
+                        }
                         session.set_cursor_pos(Some(buffer_pos));
                     }
                 }
@@ -316,6 +348,17 @@ impl ImageCopyCaptureHandler for State {
     }
 
     fn cursor_frame(&mut self, session: &CursorSessionRef, frame: Frame) {
+        // Check if cursor should be captured according to session settings
+        if !session.has_cursor() {
+            // Cursor is not visible in this capture, return success with empty damage
+            frame.success(
+                Transform::Normal,
+                Vec::new(),
+                crate::utils::get_monotonic_time(),
+            );
+            return;
+        }
+
         // Get cursor info
         let cursor_scale = 1;
         let render_cursor = self.niri.cursor_manager.get_render_cursor(cursor_scale);
