@@ -17,6 +17,18 @@ use smithay::wayland::image_copy_capture::{
 use crate::handlers::ImageCaptureSourceKind;
 use crate::niri::State;
 
+/// Per-window image copy capture tracking.
+#[derive(Debug)]
+pub struct WindowCaptureState {
+    /// Sessions capturing this window.
+    pub sessions: Vec<Session>,
+    /// Pending frames waiting to be rendered.
+    pub pending_frames: Vec<(SessionRef, Frame)>,
+}
+
+/// Thread-safe wrapper for WindowCaptureState.
+pub type WindowCaptureData = Mutex<WindowCaptureState>;
+
 /// Per-session data for image copy capture.
 pub struct SessionUserData {
     pub damage_tracker: OutputDamageTracker,
@@ -98,9 +110,31 @@ impl ImageCopyCaptureHandler for State {
                     state.image_copy_sessions.push(session);
                 }
             }
-            ImageCaptureSourceKind::Window(_window) => {
-                // Window capture not yet implemented
-                session.stop();
+            ImageCaptureSourceKind::Window(window) => {
+                // Create damage tracker for this window
+                let geometry = window.geometry();
+                let size = geometry.size.to_physical_precise_round(1.0);
+                session.user_data().insert_if_missing_threadsafe(|| {
+                    Mutex::new(SessionUserData::new(OutputDamageTracker::new(
+                        size,
+                        1.0,
+                        Transform::Normal,
+                    )))
+                });
+
+                // Store session in the window's user data
+                window.user_data().insert_if_missing(|| {
+                    Mutex::new(WindowCaptureState {
+                        sessions: Vec::new(),
+                        pending_frames: Vec::new(),
+                    })
+                });
+
+                if let Some(state) = window.user_data().get::<WindowCaptureData>() {
+                    if let Ok(mut state) = state.lock() {
+                        state.sessions.push(session);
+                    }
+                }
             }
             ImageCaptureSourceKind::Destroyed => {
                 session.stop();
@@ -150,9 +184,32 @@ impl ImageCopyCaptureHandler for State {
                     frame.fail(CaptureFailureReason::Unknown);
                 }
             }
-            ImageCaptureSourceKind::Window(_window) => {
-                // Window capture not yet implemented
-                frame.fail(CaptureFailureReason::Unknown);
+            ImageCaptureSourceKind::Window(window) => {
+                // Find which output this window is on
+                let mut found_output = None;
+                self.niri.layout.with_windows(|mapped, output, _, _| {
+                    if found_output.is_none() && mapped.window == window {
+                        found_output = output.cloned();
+                    }
+                });
+
+                let Some(output) = found_output else {
+                    frame.fail(CaptureFailureReason::Unknown);
+                    return;
+                };
+
+                // Queue the frame for rendering
+                if let Some(state) = window.user_data().get::<WindowCaptureData>() {
+                    if let Ok(mut state) = state.lock() {
+                        state.pending_frames.push((session.clone(), frame));
+                        // Schedule a redraw on the output to process the frame
+                        self.niri.queue_redraw(&output);
+                    } else {
+                        frame.fail(CaptureFailureReason::Unknown);
+                    }
+                } else {
+                    frame.fail(CaptureFailureReason::Unknown);
+                }
             }
             ImageCaptureSourceKind::Destroyed => {
                 frame.fail(CaptureFailureReason::Unknown);
@@ -191,8 +248,14 @@ impl ImageCopyCaptureHandler for State {
                     }
                 }
             }
-            ImageCaptureSourceKind::Window(_window) => {
-                // Window session cleanup not yet implemented
+            ImageCaptureSourceKind::Window(window) => {
+                // Clean up the session from window tracking
+                if let Some(state) = window.user_data().get::<WindowCaptureData>() {
+                    if let Ok(mut state) = state.lock() {
+                        state.sessions.retain(|s| s != &session);
+                        state.pending_frames.retain(|(s, _)| s != &session);
+                    }
+                }
             }
             ImageCaptureSourceKind::Destroyed => {}
         }

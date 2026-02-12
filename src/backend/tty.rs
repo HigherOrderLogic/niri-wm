@@ -1842,7 +1842,9 @@ impl Tty {
         let mut elements =
             niri.render::<TtyRenderer>(&mut renderer, output, true, RenderTarget::Output);
 
-        niri.process_image_copy_capture_frames(renderer.as_gles_renderer(), output);
+        let gles_renderer = renderer.as_gles_renderer();
+        niri.process_image_copy_capture_frames(gles_renderer, output);
+        niri.process_image_copy_capture_frames_for_window(gles_renderer, output);
 
         // Visualize the damage, if enabled.
         if niri.debug_draw_damage {

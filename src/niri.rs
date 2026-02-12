@@ -82,7 +82,7 @@ use smithay::wayland::idle_notify::IdleNotifierState;
 use smithay::wayland::image_capture_source::{
     ImageCaptureSourceState, OutputCaptureSourceState, ToplevelCaptureSourceState,
 };
-use smithay::wayland::image_copy_capture::ImageCopyCaptureState;
+use smithay::wayland::image_copy_capture::{CaptureFailureReason, ImageCopyCaptureState};
 use smithay::wayland::input_method::InputMethodManagerState;
 use smithay::wayland::keyboard_shortcuts_inhibit::{
     KeyboardShortcutsInhibitState, KeyboardShortcutsInhibitor,
@@ -5142,15 +5142,46 @@ impl Niri {
         // Render elements once for all frames
         let elements = self.render(renderer, output, false, RenderTarget::ScreenCapture);
 
-        for (_session, frame) in pending_frames {
+        for (session, frame) in pending_frames {
             let Some(mode) = output.current_mode() else {
-                frame.fail(smithay::wayland::image_copy_capture::CaptureFailureReason::Unknown);
+                frame.fail(CaptureFailureReason::Unknown);
                 continue;
             };
 
             let size = mode.size;
             let scale = output.current_scale().fractional_scale().into();
             let transform = output.current_transform();
+
+            let damages: Vec<_> = if let Some(session_data) =
+                session
+                    .user_data()
+                    .get::<crate::handlers::image_copy_capture::SessionData>()
+            {
+                if let Ok(mut data) = session_data.lock() {
+                    data.damage_tracker
+                        .damage_output(1, &elements.iter().rev().collect::<Vec<_>>())
+                        .ok()
+                        .map(|(damage, _)| {
+                            damage.map(|d| {
+                                d.iter()
+                                    .map(|rect| {
+                                        rect.to_logical(1).to_buffer(
+                                            1,
+                                            transform,
+                                            &size.to_logical(1),
+                                        )
+                                    })
+                                    .collect()
+                            })
+                        })
+                        .flatten()
+                        .unwrap_or_default()
+                } else {
+                    Vec::new()
+                }
+            } else {
+                Vec::new()
+            };
 
             let buffer = frame.buffer();
             // Check if buffer is DMABUF or SHM
@@ -5167,13 +5198,11 @@ impl Niri {
                     Ok(sync) => {
                         // Wait for rendering to complete
                         let _ = sync.wait();
-                        frame.success(transform, Vec::new(), crate::utils::get_monotonic_time());
+                        frame.success(transform, damages, crate::utils::get_monotonic_time());
                     }
                     Err(err) => {
                         warn!("error rendering image_copy_capture to dmabuf: {err:?}");
-                        frame.fail(
-                            smithay::wayland::image_copy_capture::CaptureFailureReason::Unknown,
-                        );
+                        frame.fail(CaptureFailureReason::Unknown);
                     }
                 }
             } else {
@@ -5187,13 +5216,170 @@ impl Niri {
                     elements.iter().rev(),
                 ) {
                     Ok(()) => {
-                        frame.success(transform, Vec::new(), crate::utils::get_monotonic_time());
+                        frame.success(transform, damages, crate::utils::get_monotonic_time());
                     }
                     Err(err) => {
                         warn!("error rendering image_copy_capture to shm: {err:?}");
-                        frame.fail(
-                            smithay::wayland::image_copy_capture::CaptureFailureReason::Unknown,
-                        );
+                        frame.fail(CaptureFailureReason::Unknown);
+                    }
+                }
+            }
+        }
+    }
+
+    pub fn process_image_copy_capture_frames_for_window(
+        &mut self,
+        renderer: &mut GlesRenderer,
+        output: &Output,
+    ) {
+        let _span = tracy_client::span!("Niri::process_image_copy_capture_frames_for_window");
+
+        let scale = Scale::from(output.current_scale().fractional_scale());
+
+        // Collect windows with pending frames on this output
+        let mut pending_windows = Vec::new();
+        self.layout.with_windows(|mapped, out, _, _| {
+            if out != Some(output) {
+                return;
+            }
+
+            let window = &mapped.window;
+            if let Some(state) = mapped
+                .window
+                .user_data()
+                .get::<crate::handlers::image_copy_capture::WindowCaptureData>()
+            {
+                if let Ok(state) = state.lock() {
+                    if !state.pending_frames.is_empty() {
+                        pending_windows.push(window.clone());
+                    }
+                }
+            }
+        });
+
+        // Process each window's frames
+        for window in pending_windows {
+            // Take the pending frames for this window
+            let pending_frames: Vec<_> = if let Some(state) =
+                window
+                    .user_data()
+                    .get::<crate::handlers::image_copy_capture::WindowCaptureData>()
+            {
+                if let Ok(mut state) = state.lock() {
+                    mem::take(&mut state.pending_frames)
+                } else {
+                    Vec::new()
+                }
+            } else {
+                Vec::new()
+            };
+
+            if pending_frames.is_empty() {
+                continue;
+            }
+
+            // Get window geometry for rendering
+            let geometry = window.geometry();
+            let size = geometry.size;
+            let size_physical = size.to_physical_precise_round(scale);
+            let transform = Transform::Normal;
+
+            // Render the window elements by finding it in the layout
+            let mut elements = Vec::new();
+            let mut found = false;
+            self.layout.with_windows(|mapped, _, _, _| {
+                if found || mapped.window != window {
+                    return;
+                }
+                found = true;
+                mapped.render_for_screen_cast(renderer, scale, &mut |elem| elements.push(elem));
+            });
+
+            if !found {
+                // Window not found, fail all frames
+                for (_, frame) in pending_frames {
+                    frame.fail(CaptureFailureReason::Unknown);
+                }
+                return;
+            }
+
+            for (session, frame) in pending_frames {
+                // Compute damage for this frame
+                let damages: Vec<_> = if let Some(session_data) =
+                    session
+                        .user_data()
+                        .get::<crate::handlers::image_copy_capture::SessionData>()
+                {
+                    if let Ok(mut data) = session_data.lock() {
+                        data.damage_tracker
+                            .damage_output(1, &elements.iter().rev().collect::<Vec<_>>())
+                            .ok()
+                            .map(|(damage, _)| {
+                                damage.map(|d| {
+                                    d.iter()
+                                        .map(|rect| {
+                                            // Damage is in physical coordinates, convert to buffer
+                                            smithay::utils::Rectangle::new(
+                                                smithay::utils::Point::from((
+                                                    rect.loc.x, rect.loc.y,
+                                                )),
+                                                smithay::utils::Size::from((
+                                                    rect.size.w,
+                                                    rect.size.h,
+                                                )),
+                                            )
+                                        })
+                                        .collect()
+                                })
+                            })
+                            .flatten()
+                            .unwrap_or_default()
+                    } else {
+                        Vec::new()
+                    }
+                } else {
+                    Vec::new()
+                };
+
+                let buffer = frame.buffer();
+                // Check if buffer is DMABUF or SHM
+                if let Ok(dmabuf) = smithay::wayland::dmabuf::get_dmabuf(&buffer) {
+                    // Render to DMABUF
+                    match crate::render_helpers::render_to_dmabuf(
+                        renderer,
+                        dmabuf.clone(),
+                        size_physical,
+                        scale,
+                        transform,
+                        elements.iter().rev(),
+                    ) {
+                        Ok(sync) => {
+                            // Wait for rendering to complete
+                            let _ = sync.wait();
+                            frame.success(transform, damages, crate::utils::get_monotonic_time());
+                        }
+                        Err(err) => {
+                            warn!("error rendering window image_copy_capture to dmabuf: {err:?}");
+                            frame.fail(CaptureFailureReason::Unknown);
+                        }
+                    }
+                } else {
+                    // Try SHM buffer
+                    match crate::render_helpers::render_to_shm(
+                        renderer,
+                        &buffer,
+                        size_physical,
+                        scale,
+                        transform,
+                        elements.iter().rev(),
+                    ) {
+                        Ok(_) => {
+                            frame.success(transform, damages, crate::utils::get_monotonic_time());
+                        }
+                        Err(err) => {
+                            warn!("error rendering window image_copy_capture to shm: {err:?}");
+                            frame.fail(CaptureFailureReason::Unknown);
+                        }
                     }
                 }
             }

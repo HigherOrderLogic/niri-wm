@@ -188,7 +188,10 @@ impl Winit {
         );
 
         // Process any pending image_copy_capture frames.
-        self.with_primary_renderer(|r| niri.process_image_copy_capture_frames(r, output));
+        self.with_primary_renderer(|r| {
+            niri.process_image_copy_capture_frames(r, output);
+            niri.process_image_copy_capture_frames_for_window(r, output);
+        });
 
         // Visualize the damage, if enabled.
         if niri.debug_draw_damage {

@@ -127,10 +127,10 @@ impl Headless {
     }
 
     pub fn render(&mut self, niri: &mut Niri, output: &Output) -> RenderResult {
-        // Process any pending image_copy_capture frames.
-        if let Some(renderer) = self.renderer.as_mut() {
-            niri.process_image_copy_capture_frames(renderer, output);
-        }
+        self.with_primary_renderer(|r| {
+            niri.process_image_copy_capture_frames(r, output);
+            niri.process_image_copy_capture_frames_for_window(r, output);
+        });
 
         let states = RenderElementStates::default();
         let mut presentation_feedbacks = niri.take_presentation_feedbacks(output, &states);
