@@ -492,6 +492,8 @@ pub struct OutputState {
     pub debug_damage_tracker: OutputDamageTracker,
     /// Image copy capture sessions for this output.
     pub image_copy_sessions: Vec<smithay::wayland::image_copy_capture::Session>,
+    /// Cursor capture sessions for this output.
+    pub cursor_sessions: Vec<smithay::wayland::image_copy_capture::CursorSession>,
     /// Pending image copy capture frames waiting to be rendered.
     pub pending_image_copy_frames: Vec<(
         smithay::wayland::image_copy_capture::SessionRef,
@@ -2845,6 +2847,7 @@ impl Niri {
             screen_transition: None,
             debug_damage_tracker: OutputDamageTracker::from_output(&output),
             image_copy_sessions: Vec::new(),
+            cursor_sessions: Vec::new(),
             pending_image_copy_frames: Vec::new(),
         };
         let rv = self.output_state.insert(output.clone(), state);
