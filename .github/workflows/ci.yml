@@ -303,6 +303,13 @@ jobs:
         uses: cachix/install-nix-action@v31
         continue-on-error: true
 
+      - name: Cache Nix store
+        uses: nix-community/cache-nix-action@v7
+        with:
+          primary-key: nix-${{ runner.os }}-${{ runner.arch }}-${{ github.run_id }}
+          restore-prefixes-first-match: nix-${{ runner.os }}-${{ runner.arch }}
+          gc-max-store-size: 6G
+
       - run: nix flake check
         continue-on-error: true
 
