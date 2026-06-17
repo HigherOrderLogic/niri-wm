@@ -14,6 +14,7 @@ use smithay::wayland::compositor::{
     SurfaceAttributes,
 };
 use smithay::wayland::dmabuf::get_dmabuf;
+use smithay::wayland::shell::xdg::dialog::ToplevelDialogHint;
 use smithay::wayland::shell::xdg::ToplevelCachedState;
 use smithay::wayland::shm::{ShmHandler, ShmState};
 use smithay::{delegate_compositor, delegate_shm};
@@ -23,7 +24,7 @@ use crate::handlers::XDG_ACTIVATION_TOKEN_TIMEOUT;
 use crate::layout::{ActivateWindow, AddWindowTarget, LayoutElement as _};
 use crate::niri::{CastTarget, ClientState, LockState, State};
 use crate::utils::transaction::Transaction;
-use crate::utils::{is_mapped, send_scale_transform};
+use crate::utils::{is_mapped, send_scale_transform, with_toplevel_role};
 use crate::window::{InitialConfigureState, Mapped, ResolvedWindowRules, Unmapped};
 
 impl CompositorHandler for State {
@@ -151,13 +152,19 @@ impl CompositorHandler for State {
                     let is_floating = rules.compute_open_floating(toplevel);
 
                     // Figure out if we should activate the window.
-                    let activate = rules.open_focused.map(|focus| {
-                        if focus {
-                            ActivateWindow::Yes
-                        } else {
-                            ActivateWindow::No
-                        }
-                    });
+                    let activate = if with_toplevel_role(toplevel, |role| {
+                        role.dialog_hint == ToplevelDialogHint::Modal
+                    }) {
+                        Some(ActivateWindow::Yes)
+                    } else {
+                        rules.open_focused.map(|focus| {
+                            if focus {
+                                ActivateWindow::Yes
+                            } else {
+                                ActivateWindow::No
+                            }
+                        })
+                    };
                     let activate = activate.unwrap_or_else(|| {
                         // Check the token timestamp again in case the window took a while between
                         // requesting activation and mapping.

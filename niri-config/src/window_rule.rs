@@ -136,6 +136,12 @@ pub struct Match {
     #[knuffel(property)]
     pub is_urgent: Option<bool>,
     #[knuffel(property)]
+    pub is_dialog: Option<bool>,
+    #[knuffel(property)]
+    pub is_modal: Option<bool>,
+    #[knuffel(property)]
+    pub has_modal_child: Option<bool>,
+    #[knuffel(property)]
     pub at_startup: Option<bool>,
 }
 

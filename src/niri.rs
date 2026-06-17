@@ -100,7 +100,8 @@ use smithay::wayland::session_lock::{LockSurface, SessionLockManagerState, Sessi
 use smithay::wayland::shell::kde::decoration::KdeDecorationState;
 use smithay::wayland::shell::wlr_layer::{self, Layer, WlrLayerShellState};
 use smithay::wayland::shell::xdg::decoration::XdgDecorationState;
-use smithay::wayland::shell::xdg::XdgShellState;
+use smithay::wayland::shell::xdg::dialog::XdgDialogState;
+use smithay::wayland::shell::xdg::{ToplevelSurface, XdgShellState};
 use smithay::wayland::shm::ShmState;
 #[cfg(test)]
 use smithay::wayland::single_pixel_buffer::SinglePixelBufferState;
@@ -274,6 +275,7 @@ pub struct Niri {
     // Smithay state.
     pub compositor_state: CompositorState,
     pub xdg_shell_state: XdgShellState,
+    pub xdg_dialog_state: XdgDialogState,
     pub xdg_decoration_state: XdgDecorationState,
     pub kde_decoration_state: KdeDecorationState,
     pub layer_shell_state: WlrLayerShellState,
@@ -827,6 +829,7 @@ impl State {
         self.niri.refresh_mapped_cast_window_rules();
         self.ipc_refresh_casts();
 
+        self.niri.refresh_blocking_dialog();
         self.niri.refresh_window_rules();
         self.refresh_ipc_outputs();
         self.ipc_refresh_layout();
@@ -973,10 +976,15 @@ impl State {
 
     /// Focus a specific window, taking care of a potential active output change and cursor
     /// warp.
+    ///
+    /// If the window is blocked by a child modal dialog, transfer the focus to the child window
+    /// instead.
     pub fn focus_window(&mut self, window: &Window) {
         let active_output = self.niri.layout.active_output().cloned();
 
-        self.niri.layout.activate_window(window);
+        self.niri
+            .layout
+            .activate_window(&self.niri.modal_focus_target_of(window));
 
         let new_active = self.niri.layout.active_output().cloned();
         if new_active != active_output {
@@ -1138,6 +1146,13 @@ impl State {
 
             if !good {
                 self.niri.layer_shell_on_demand_focus = None;
+            }
+        }
+
+        if let Some(window) = self.niri.layout.focus().map(|mapped| mapped.window.clone()) {
+            let target = self.niri.modal_focus_target_of(&window);
+            if target != window {
+                self.niri.layout.activate_window(&target);
             }
         }
 
@@ -2271,6 +2286,7 @@ impl Niri {
             &display_handle,
             [WmCapabilities::Fullscreen, WmCapabilities::Maximize],
         );
+        let xdg_dialog_state = XdgDialogState::new::<State>(&display_handle);
         let xdg_decoration_state =
             XdgDecorationState::new_with_filter::<State, _>(&display_handle, |client| {
                 client
@@ -2529,6 +2545,7 @@ impl Niri {
 
             compositor_state,
             xdg_shell_state,
+            xdg_dialog_state,
             xdg_decoration_state,
             kde_decoration_state,
             layer_shell_state,
@@ -4015,6 +4032,41 @@ impl Niri {
                 })
             });
         self.idle_notifier_state.set_is_inhibited(is_inhibited);
+    }
+
+    pub fn modal_focus_target_of(&self, window: &Window) -> Window {
+        let mut target = window.clone();
+
+        loop {
+            let child_window = self.layout.windows().find_map(|(_, mapped)| {
+                (mapped.toplevel().parent().as_ref() == Some(target.toplevel()?.wl_surface())
+                    && mapped.is_modal_dialog())
+                .then(|| mapped.window.clone())
+            });
+
+            if let Some(child) = child_window {
+                target = child;
+            } else {
+                break target;
+            }
+        }
+    }
+
+    pub fn refresh_blocking_dialog(&mut self) {
+        let blocking_parents: HashSet<_> = self
+            .layout
+            .windows()
+            .filter_map(|(_, mapped)| {
+                mapped
+                    .is_modal_dialog()
+                    .then(|| mapped.toplevel().parent())
+                    .flatten()
+            })
+            .collect();
+
+        self.layout.with_windows_mut(|mapped, _| {
+            mapped.set_blocking_dialog(blocking_parents.contains(mapped.toplevel().wl_surface()));
+        });
     }
 
     pub fn refresh_window_states(&mut self) {
@@ -6469,6 +6521,18 @@ impl Niri {
         if let Some(output) = self.window_mru_ui.output().cloned() {
             self.queue_redraw(&output);
         }
+    }
+
+    pub fn refuse_if_blocked_by_modal(&self, toplevel: &ToplevelSurface) -> bool {
+        self.layout
+            .windows()
+            .find_map(|(_, mapped)| {
+                let this_toplevel = mapped.toplevel();
+                (this_toplevel.parent().as_ref() == Some(toplevel.wl_surface())
+                    && mapped.is_modal_dialog())
+                .then(|| this_toplevel.wl_surface().clone())
+            })
+            .is_some()
     }
 }
 

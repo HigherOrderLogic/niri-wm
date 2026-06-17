@@ -10,6 +10,7 @@ use niri_ipc::ColumnDisplay;
 use smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel;
 use smithay::utils::{Logical, Size};
 use smithay::wayland::compositor::with_states;
+use smithay::wayland::shell::xdg::dialog::ToplevelDialogHint;
 use smithay::wayland::shell::xdg::{
     SurfaceCachedState, ToplevelSurface, XdgToplevelSurfaceRoleAttributes,
 };
@@ -175,6 +176,13 @@ impl<'a> WindowRef<'a> {
         match self {
             WindowRef::Unmapped(_) => false,
             WindowRef::Mapped(mapped) => mapped.is_window_cast_target(),
+        }
+    }
+
+    pub fn is_blocking_dialog(self) -> bool {
+        match self {
+            WindowRef::Unmapped(_) => false,
+            WindowRef::Mapped(mapped) => mapped.is_blocking_dialog(),
         }
     }
 }
@@ -441,6 +449,24 @@ fn window_matches(window: WindowRef, role: &XdgToplevelSurfaceRoleAttributes, m:
 
     if let Some(is_window_cast_target) = m.is_window_cast_target {
         if window.is_window_cast_target() != is_window_cast_target {
+            return false;
+        }
+    }
+
+    if let Some(is_dialog) = m.is_dialog {
+        if (role.dialog_hint != ToplevelDialogHint::Unknown) != is_dialog {
+            return false;
+        }
+    }
+
+    if let Some(is_modal) = m.is_modal {
+        if (role.dialog_hint == ToplevelDialogHint::Modal) != is_modal {
+            return false;
+        }
+    }
+
+    if let Some(has_modal_child) = m.has_modal_child {
+        if window.is_blocking_dialog() != has_modal_child {
             return false;
         }
     }

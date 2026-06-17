@@ -15,6 +15,7 @@ use smithay::reexports::wayland_server::Resource as _;
 use smithay::utils::{Logical, Point, Rectangle, Scale, Serial, Size, Transform};
 use smithay::wayland::compositor::{remove_pre_commit_hook, with_states, HookId, SurfaceData};
 use smithay::wayland::seat::WaylandFocus;
+use smithay::wayland::shell::xdg::dialog::ToplevelDialogHint;
 use smithay::wayland::shell::xdg::{
     SurfaceCachedState, ToplevelCachedState, ToplevelConfigure, ToplevelSurface,
     XdgToplevelSurfaceData,
@@ -87,6 +88,9 @@ pub struct Mapped {
 
     /// Whether this has an urgent indicator.
     is_urgent: bool,
+
+    /// Whether this window is blocked by a modal dialog child.
+    is_blocking_dialog: bool,
 
     /// Whether this window has the keyboard focus.
     is_focused: bool,
@@ -286,6 +290,7 @@ impl Mapped {
             needs_frame_callback: false,
             offscreen_data: RefCell::new(None),
             is_urgent: false,
+            is_blocking_dialog: false,
             is_focused: false,
             is_active_in_column: true,
             is_floating: false,
@@ -610,6 +615,25 @@ impl Mapped {
 
     pub fn is_urgent(&self) -> bool {
         self.is_urgent
+    }
+
+    pub fn dialog_hint(&self) -> ToplevelDialogHint {
+        with_toplevel_role(self.toplevel(), |role| role.dialog_hint)
+    }
+
+    pub fn is_modal_dialog(&self) -> bool {
+        self.dialog_hint() == ToplevelDialogHint::Modal
+    }
+
+    pub fn is_blocking_dialog(&self) -> bool {
+        self.is_blocking_dialog
+    }
+
+    pub fn set_blocking_dialog(&mut self, blocked: bool) -> bool {
+        let changed = self.is_blocking_dialog != blocked;
+        self.is_blocking_dialog = blocked;
+        self.need_to_recompute_rules |= changed;
+        changed
     }
 }
 

@@ -71,6 +71,9 @@ impl XdgShellHandler for State {
     }
 
     fn move_request(&mut self, surface: ToplevelSurface, _seat: WlSeat, serial: Serial) {
+        if self.niri.refuse_if_blocked_by_modal(&surface) {
+            return;
+        }
         let wl_surface = surface.wl_surface();
 
         let mut grab_start_data = None;
@@ -155,6 +158,9 @@ impl XdgShellHandler for State {
         serial: Serial,
         edges: xdg_toplevel::ResizeEdge,
     ) {
+        if self.niri.refuse_if_blocked_by_modal(&surface) {
+            return;
+        }
         let wl_surface = surface.wl_surface();
 
         let mut grab_start_data = None;
@@ -407,6 +413,10 @@ impl XdgShellHandler for State {
     }
 
     fn maximize_request(&mut self, toplevel: ToplevelSurface) {
+        if self.niri.refuse_if_blocked_by_modal(&toplevel) {
+            toplevel.send_configure();
+            return;
+        }
         if let Some((mapped, _)) = self
             .niri
             .layout
@@ -489,6 +499,10 @@ impl XdgShellHandler for State {
     }
 
     fn unmaximize_request(&mut self, toplevel: ToplevelSurface) {
+        if self.niri.refuse_if_blocked_by_modal(&toplevel) {
+            toplevel.send_configure();
+            return;
+        }
         if let Some((mapped, _)) = self
             .niri
             .layout
@@ -612,6 +626,10 @@ impl XdgShellHandler for State {
         toplevel: ToplevelSurface,
         wl_output: Option<wl_output::WlOutput>,
     ) {
+        if self.niri.refuse_if_blocked_by_modal(&toplevel) {
+            toplevel.send_configure();
+            return;
+        }
         let requested_output = wl_output.and_then(|o| self.niri.output_from_resource(&o));
 
         if let Some((mapped, current_output)) = self
@@ -700,6 +718,10 @@ impl XdgShellHandler for State {
     }
 
     fn unfullscreen_request(&mut self, toplevel: ToplevelSurface) {
+        if self.niri.refuse_if_blocked_by_modal(&toplevel) {
+            toplevel.send_configure();
+            return;
+        }
         if let Some((mapped, _)) = self
             .niri
             .layout

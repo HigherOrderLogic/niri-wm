@@ -57,6 +57,8 @@ use smithay::wayland::selection::{SelectionHandler, SelectionTarget};
 use smithay::wayland::session_lock::{
     LockSurface, SessionLockHandler, SessionLockManagerState, SessionLocker,
 };
+use smithay::wayland::shell::xdg::dialog::{ToplevelDialogHint, XdgDialogHandler};
+use smithay::wayland::shell::xdg::ToplevelSurface;
 use smithay::wayland::tablet_manager::TabletSeatHandler;
 use smithay::wayland::xdg_activation::{
     XdgActivationHandler, XdgActivationState, XdgActivationToken, XdgActivationTokenData,
@@ -70,6 +72,7 @@ use smithay::{
     delegate_relative_pointer, delegate_seat, delegate_security_context, delegate_session_lock,
     delegate_single_pixel_buffer, delegate_tablet_manager, delegate_text_input_manager,
     delegate_viewporter, delegate_virtual_keyboard_manager, delegate_xdg_activation,
+    delegate_xdg_dialog,
 };
 
 pub use crate::handlers::xdg_shell::KdeDecorationsModeState;
@@ -859,5 +862,21 @@ delegate_output_management!(State);
 
 impl MutterX11InteropHandler for State {}
 delegate_mutter_x11_interop!(State);
+
+impl XdgDialogHandler for State {
+    fn dialog_hint_changed(&mut self, toplevel: ToplevelSurface, hint: ToplevelDialogHint) {
+        if hint != ToplevelDialogHint::Modal {
+            return;
+        }
+        if let Some((mapped, _)) = self
+            .niri
+            .layout
+            .find_window_and_output(toplevel.wl_surface())
+        {
+            self.focus_window(&mapped.window.clone());
+        }
+    }
+}
+delegate_xdg_dialog!(State);
 
 delegate_single_pixel_buffer!(State);
