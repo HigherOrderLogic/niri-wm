@@ -196,7 +196,7 @@ pub struct Bind {
     /// The modifier keys of the key bind.
     pub modifiers: Vec<String>,
     /// The action that the key bind triggers.
-    pub action: String,
+    pub action: serde_json::Value,
     /// If the key bind will repeat itself.
     pub repeat: bool,
     /// Cooldown of the key bind.

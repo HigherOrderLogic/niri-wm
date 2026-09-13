@@ -563,7 +563,7 @@ pub fn handle_msg(mut msg: Msg, json: bool) -> anyhow::Result<()> {
                 return Ok(());
             }
 
-            let mut output = String::new();
+            let mut output = Vec::new();
             for bind in response.binds {
                 let niri_ipc::Bind {
                     trigger,
@@ -576,26 +576,30 @@ pub fn handle_msg(mut msg: Msg, json: bool) -> anyhow::Result<()> {
                     allow_inhibiting,
                 } = bind;
                 let modifiers = modifiers.join("+");
-                let trigger = trigger.unwrap_or(String::from("<unknown>"));
-                output.push_str(format!("{modifiers}+{trigger}\n").as_ref());
-                if let Some(title) = hotkey_overlay_title {
-                    output.push_str(format!("Title: {title}\n").as_ref());
+                let trigger = trigger.unwrap_or_else(|| "<unknown>".into());
+                if modifiers.is_empty() {
+                    output.push(trigger);
                 } else {
-                    output.push_str("No title\n");
+                    output.push(format!("{modifiers}+{trigger}"));
                 }
-                output.push_str(format!("Action: {action}\n").as_ref());
-                output.push_str(format!("Can repeat: {repeat}").as_ref());
+                if let Some(title) = hotkey_overlay_title {
+                    output.push(format!("Title: {title}"));
+                } else {
+                    output.push("No title".into());
+                }
+                output.push(format!("Action: {action}"));
+                output.push(format!("Can repeat: {repeat}"));
                 if let Some(cd) = cooldown {
                     let ms = cd.as_millis();
-                    output.push_str(format!("Cooldown: {ms}ms\n").as_ref());
+                    output.push(format!("Cooldown: {ms}ms"));
                 } else {
-                    output.push_str("No cooldown");
+                    output.push("No cooldown".into());
                 }
-                output.push_str(format!("Allow when locked: {allow_when_locked}\n").as_ref());
-                output.push_str(format!("Allow inhibiting: {allow_inhibiting}\n").as_ref());
-                output.push_str("\n");
+                output.push(format!("Allow when locked: {allow_when_locked}"));
+                output.push(format!("Allow inhibiting: {allow_inhibiting}"));
+                output.push(String::new());
             }
-            println!("{output}");
+            println!("{}", output.join("\n"));
         }
     }
 

@@ -468,44 +468,45 @@ async fn process(ctx: &ClientCtx, request: Request) -> Reply {
                     .iter()
                     .map(|b| {
                         let trigger = match b.key.trigger {
-                            niri_config::Trigger::Keysym(k) => k.name().map(String::from),
-                            niri_config::Trigger::MouseLeft => Some(String::from("MouseLeft")),
-                            niri_config::Trigger::MouseRight => Some(String::from("MouseRight")),
-                            niri_config::Trigger::MouseMiddle => Some(String::from("MouseMiddle")),
-                            niri_config::Trigger::MouseBack => Some(String::from("MouseBack")),
-                            niri_config::Trigger::MouseForward => {
-                                Some(String::from("MouseForward"))
-                            }
-                            niri_config::Trigger::WheelScrollDown => {
-                                Some(String::from("WheelScrollDown"))
-                            }
-                            niri_config::Trigger::WheelScrollUp => {
-                                Some(String::from("WheelScrollUp"))
-                            }
-                            niri_config::Trigger::WheelScrollLeft => {
-                                Some(String::from("WheelScrollLeft"))
-                            }
+                            niri_config::Trigger::Keysym(k) => k.name().map(From::from),
+                            niri_config::Trigger::MouseLeft => Some("MouseLeft".into()),
+                            niri_config::Trigger::MouseRight => Some("MouseRight".into()),
+                            niri_config::Trigger::MouseMiddle => Some("MouseMiddle".into()),
+                            niri_config::Trigger::MouseBack => Some("MouseBack".into()),
+                            niri_config::Trigger::MouseForward => Some("MouseForward".into()),
+                            niri_config::Trigger::WheelScrollDown => Some("WheelScrollDown".into()),
+                            niri_config::Trigger::WheelScrollUp => Some("WheelScrollUp".into()),
+                            niri_config::Trigger::WheelScrollLeft => Some("WheelScrollLeft".into()),
                             niri_config::Trigger::WheelScrollRight => {
-                                Some(String::from("WheelScrollRight"))
+                                Some("WheelScrollRight".into())
                             }
                             niri_config::Trigger::TouchpadScrollDown => {
-                                Some(String::from("TouchpadScrollDown"))
+                                Some("TouchpadScrollDown".into())
                             }
                             niri_config::Trigger::TouchpadScrollUp => {
-                                Some(String::from("TouchpadScrollUp"))
+                                Some("TouchpadScrollUp".into())
                             }
                             niri_config::Trigger::TouchpadScrollLeft => {
-                                Some(String::from("TouchpadScrollLeft"))
+                                Some("TouchpadScrollLeft".into())
                             }
                             niri_config::Trigger::TouchpadScrollRight => {
-                                Some(String::from("TouchpadScrollRight"))
+                                Some("TouchpadScrollRight".into())
+                            }
+                            niri_config::Trigger::TabletStylusButton1 => {
+                                Some("TabletStylusButton1".into())
+                            }
+                            niri_config::Trigger::TabletStylusButton2 => {
+                                Some("TabletStylusButton2".into())
+                            }
+                            niri_config::Trigger::TabletStylusButton3 => {
+                                Some("TabletStylusButton3".into())
                             }
                         };
                         let modifiers = b
                             .key
                             .modifiers
                             .iter_names()
-                            .map(|(name, _)| String::from(name))
+                            .map(|(name, _)| name.into())
                             .collect();
                         let niri_config::Bind {
                             repeat,
@@ -513,15 +514,13 @@ async fn process(ctx: &ClientCtx, request: Request) -> Reply {
                             allow_when_locked,
                             allow_inhibiting,
                             hotkey_overlay_title,
-                            action,
                             ..
                         } = b;
 
                         niri_ipc::Bind {
                             trigger,
                             modifiers,
-                            // TODO: get feedback on how to implement this
-                            action: format!("{action:?}"),
+                            action: serde_json::to_value(&b.action).unwrap(),
                             repeat: *repeat,
                             cooldown: *cooldown,
                             allow_when_locked: *allow_when_locked,
