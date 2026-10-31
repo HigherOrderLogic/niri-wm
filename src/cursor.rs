@@ -1,11 +1,16 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
-use std::env;
-use std::fs::File;
+use std::fs::{self, File};
 use std::io::Read;
+use std::path::Path;
 use std::rc::Rc;
+use std::sync::mpsc;
+use std::{env, thread};
 
-use anyhow::{anyhow, Context};
+use anyhow::{anyhow, bail, Context};
+use librsvg_rebind::prelude::HandleExt;
+use pangocairo::cairo::{self, ImageSurface};
+use serde::{de, Deserialize, Deserializer};
 use smithay::backend::allocator::Fourcc;
 use smithay::backend::renderer::element::memory::MemoryRenderBuffer;
 use smithay::input::pointer::{CursorIcon, CursorImageStatus, CursorImageSurfaceData};
@@ -111,12 +116,12 @@ impl CursorManager {
             .entry((icon, scale))
             .or_insert_with_key(|(icon, scale)| {
                 let size = self.size as i32 * scale;
-                let mut cursor = Self::load_xcursor(&self.theme, icon.name(), size);
+                let mut cursor = Self::load_cursor(&self.theme, icon.name(), size);
 
                 // Check alternative names to account for non-compliant themes.
                 if cursor.is_err() {
                     for name in icon.alt_names() {
-                        cursor = Self::load_xcursor(&self.theme, name, size);
+                        cursor = Self::load_cursor(&self.theme, name, size);
                         if cursor.is_ok() {
                             break;
                         }
@@ -135,6 +140,13 @@ impl CursorManager {
                 cursor.ok().map(Rc::new)
             })
             .clone()
+    }
+
+    fn load_cursor(theme: &CursorTheme, name: &str, size: i32) -> anyhow::Result<XCursor> {
+        Self::load_svg_cursor(theme, name, size).or_else(|e| {
+            debug!("failed to load svg cursor: {:?}", e);
+            Self::load_xcursor(theme, name, size)
+        })
     }
 
     /// Get default cursor.
@@ -186,6 +198,82 @@ impl CursorManager {
         })
     }
 
+    /// Load the scalable cursor with the given `name` from the file system, scaling to the given
+    /// `size`.
+    fn load_svg_cursor(theme: &CursorTheme, name: &str, size: i32) -> anyhow::Result<XCursor> {
+        let _span = tracy_client::span!("load_svg_cursor");
+
+        // See https://planet.kde.org/vlad-zahorodnii-2024-10-06-svg-cursors-everything-that-you-need-to-know-about-them
+        let Some(dir) = theme.load_scalable(name) else {
+            bail!("no cursor theme with name {} found", name);
+        };
+        let metadata_path = dir.join("metadata.json");
+        let metadata = fs::read(&metadata_path)?;
+        let metas: Vec<SvgCursorMeta> = match serde_json::from_slice(&metadata) {
+            Ok(metas) => metas,
+            Err(e) => {
+                warn!(
+                    "error parsing SVG cursor metadata at {:?}: {:?}",
+                    metadata_path, e
+                );
+                return Err(e.into());
+            }
+        };
+
+        if metas.is_empty() {
+            bail!(
+                "empty metadata found for cursor theme {} at {:?}",
+                name,
+                metadata_path
+            );
+        }
+
+        let (tx, rx) = mpsc::channel();
+        thread::scope(|s| {
+            for (idx, meta) in metas.iter().enumerate() {
+                let tx = tx.clone();
+                let dir = &dir;
+                s.spawn(move || {
+                    if let Err(e) = tx.send((idx, rasterize_frame(dir, meta, size))) {
+                        warn!("failed to send SVG frame {}: {:?}", idx, e);
+                    }
+                });
+            }
+        });
+        drop(tx);
+
+        let placeholder = Image {
+            size: 0,
+            width: 0,
+            height: 0,
+            xhot: 0,
+            yhot: 0,
+            delay: 0,
+            pixels_rgba: Vec::new(),
+            pixels_argb: Vec::new(),
+        };
+        let mut images = vec![placeholder; metas.len()];
+        for (idx, res) in rx {
+            let image = res?;
+            images[idx] = Image {
+                size: size as u32,
+                width: image.width,
+                height: image.height,
+                xhot: image.xhot,
+                yhot: image.yhot,
+                delay: image.delay,
+                pixels_rgba: image.pixels.into(),
+                pixels_argb: Vec::new(),
+            };
+        }
+
+        let animation_duration = images.iter().fold(0, |acc, image| acc + image.delay);
+        Ok(XCursor {
+            images,
+            animation_duration,
+        })
+    }
+
     /// Set the common XCURSOR env variables.
     fn ensure_env(theme: &str, size: u8) {
         env::set_var("XCURSOR_THEME", theme);
@@ -209,6 +297,77 @@ impl CursorManager {
             animation_duration: 0,
         }
     }
+}
+
+// See https://invent.kde.org/plasma/breeze/-/blob/master/cursors/svg-cursor-format.schema.json
+#[derive(Debug, Clone, Deserialize)]
+struct SvgCursorMeta {
+    filename: String,
+    #[serde(deserialize_with = "unsigned_float")]
+    nominal_size: f64,
+    hotspot_x: f64,
+    hotspot_y: f64,
+    #[serde(default)]
+    delay: u32,
+}
+
+fn unsigned_float<'d, D>(deserializer: D) -> Result<f64, D::Error>
+where
+    D: Deserializer<'d>,
+{
+    let res = f64::deserialize(deserializer)?;
+    if res <= 0. {
+        Err(de::Error::custom(format!(
+            "{} should be greater than 0",
+            res
+        )))
+    } else {
+        Ok(res)
+    }
+}
+
+struct SvgImage {
+    width: u32,
+    height: u32,
+    xhot: u32,
+    yhot: u32,
+    delay: u32,
+    pixels: Box<[u8]>,
+}
+
+fn rasterize_frame(dir: &Path, meta: &SvgCursorMeta, size: i32) -> anyhow::Result<SvgImage> {
+    let svg_path = dir.join(&meta.filename);
+    let Some(handle) = librsvg_rebind::Handle::from_file(&svg_path.to_string_lossy())? else {
+        bail!("failed to get SVG handle from path {:?}", svg_path);
+    };
+    let Some((svg_width, svg_height)) = handle.intrinsic_size_in_pixels() else {
+        bail!("cursor has no intrinsic size");
+    };
+    let factor = size as f64 / meta.nominal_size;
+    let width = ((svg_width * factor).ceil() as u32).max(1);
+    let height = ((svg_height * factor).ceil() as u32).max(1);
+    let surface = ImageSurface::create(cairo::Format::ARgb32, width as i32, height as i32)?;
+    let cr = cairo::Context::new(&surface)?;
+    let viewport = librsvg_rebind::Rectangle::new(0., 0., width as f64, height as f64);
+    handle.render_document(&cr, &viewport)?;
+
+    let stride = surface.stride();
+    let row_len = width as usize * 4;
+    let mut pixels = Vec::with_capacity(row_len * height as usize);
+    surface.with_data(|data| {
+        for row in data.chunks_exact(stride as usize).take(height as usize) {
+            pixels.extend_from_slice(&row[..row_len]);
+        }
+    })?;
+
+    Ok(SvgImage {
+        width,
+        height,
+        xhot: ((meta.hotspot_x * factor).round() as u32).clamp(0, width),
+        yhot: ((meta.hotspot_y * factor).round() as u32).clamp(0, height),
+        delay: meta.delay,
+        pixels: pixels.into_boxed_slice(),
+    })
 }
 
 /// The cursor prepared for renderer.
