@@ -1,14 +1,16 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
-use std::env;
 use std::fs::{self, File};
 use std::io::Read;
+use std::path::Path;
 use std::rc::Rc;
+use std::sync::mpsc;
+use std::{env, thread};
 
 use anyhow::{anyhow, bail, Context};
 use librsvg_rebind::prelude::HandleExt;
 use pangocairo::cairo::{self, ImageSurface};
-use serde::Deserialize;
+use serde::{de, Deserialize, Deserializer};
 use smithay::backend::allocator::Fourcc;
 use smithay::backend::renderer::element::memory::MemoryRenderBuffer;
 use smithay::input::pointer::{CursorIcon, CursorImageStatus, CursorImageSurfaceData};
@@ -205,35 +207,64 @@ impl CursorManager {
         let Some(dir) = theme.load_scalable(name) else {
             bail!("no cursor theme with name {} found", name);
         };
-        let metadata = fs::read(dir.join("metadata.json"))?;
+        let metadata_path = dir.join("metadata.json");
+        let metadata = fs::read(&metadata_path)?;
         let metas: Vec<SvgCursorMeta> = match serde_json::from_slice(&metadata) {
             Ok(metas) => metas,
             Err(e) => {
-                warn!("error parsing SVG cursor metadata in {dir:?}: {e:?}");
+                warn!(
+                    "error parsing SVG cursor metadata at {:?}: {:?}",
+                    metadata_path, e
+                );
                 return Err(e.into());
             }
         };
 
-        let mut images = Vec::with_capacity(metas.len());
-        for meta in &metas {
-            if meta.nominal_size <= 0. {
-                bail!(
-                    "invalid nominal_size {} for file {}",
-                    meta.nominal_size,
-                    meta.filename
-                );
-            }
-
-            let svg_path = dir.join(&meta.filename);
-            if let Some(p) = svg_path.to_str() {
-                images.push(rasterize_svg(p, meta, size)?);
-            } else {
-                bail!("failed to get svg path {:?}", svg_path);
-            }
+        if metas.is_empty() {
+            bail!(
+                "empty metadata found for cursor theme {} at {:?}",
+                name,
+                metadata_path
+            );
         }
 
-        if images.is_empty() {
-            bail!("no image found for cursor theme {}", name);
+        let (tx, rx) = mpsc::channel();
+        thread::scope(|s| {
+            for (idx, meta) in metas.iter().enumerate() {
+                let tx = tx.clone();
+                let dir = &dir;
+                s.spawn(move || {
+                    if let Err(e) = tx.send((idx, rasterize_frame(dir, meta, size))) {
+                        warn!("failed to send SVG frame {}: {:?}", idx, e);
+                    }
+                });
+            }
+        });
+        drop(tx);
+
+        let placeholder = Image {
+            size: 0,
+            width: 0,
+            height: 0,
+            xhot: 0,
+            yhot: 0,
+            delay: 0,
+            pixels_rgba: Vec::new(),
+            pixels_argb: Vec::new(),
+        };
+        let mut images = vec![placeholder; metas.len()];
+        for (idx, res) in rx {
+            let image = res?;
+            images[idx] = Image {
+                size: size as u32,
+                width: image.width,
+                height: image.height,
+                xhot: image.xhot,
+                yhot: image.yhot,
+                delay: image.delay,
+                pixels_rgba: image.pixels.into(),
+                pixels_argb: Vec::new(),
+            };
         }
 
         let animation_duration = images.iter().fold(0, |acc, image| acc + image.delay);
@@ -272,6 +303,7 @@ impl CursorManager {
 #[derive(Debug, Clone, Deserialize)]
 struct SvgCursorMeta {
     filename: String,
+    #[serde(deserialize_with = "unsigned_float")]
     nominal_size: f64,
     hotspot_x: f64,
     hotspot_y: f64,
@@ -279,9 +311,34 @@ struct SvgCursorMeta {
     delay: u32,
 }
 
-fn rasterize_svg(path: &str, meta: &SvgCursorMeta, size: i32) -> anyhow::Result<Image> {
-    let Some(handle) = librsvg_rebind::Handle::from_file(path)? else {
-        bail!("failed to get handle from file {}", path);
+fn unsigned_float<'d, D>(deserializer: D) -> Result<f64, D::Error>
+where
+    D: Deserializer<'d>,
+{
+    let res = f64::deserialize(deserializer)?;
+    if res <= 0. {
+        Err(de::Error::custom(format!(
+            "{} should be greater than 0",
+            res
+        )))
+    } else {
+        Ok(res)
+    }
+}
+
+struct SvgImage {
+    width: u32,
+    height: u32,
+    xhot: u32,
+    yhot: u32,
+    delay: u32,
+    pixels: Box<[u8]>,
+}
+
+fn rasterize_frame(dir: &Path, meta: &SvgCursorMeta, size: i32) -> anyhow::Result<SvgImage> {
+    let svg_path = dir.join(&meta.filename);
+    let Some(handle) = librsvg_rebind::Handle::from_file(&svg_path.to_string_lossy())? else {
+        bail!("failed to get SVG handle from path {:?}", svg_path);
     };
     let Some((svg_width, svg_height)) = handle.intrinsic_size_in_pixels() else {
         bail!("cursor has no intrinsic size");
@@ -303,15 +360,13 @@ fn rasterize_svg(path: &str, meta: &SvgCursorMeta, size: i32) -> anyhow::Result<
         }
     })?;
 
-    Ok(Image {
-        size: size as u32,
+    Ok(SvgImage {
         width,
         height,
         xhot: ((meta.hotspot_x * factor).round() as u32).clamp(0, width),
         yhot: ((meta.hotspot_y * factor).round() as u32).clamp(0, height),
         delay: meta.delay,
-        pixels_rgba: pixels,
-        pixels_argb: Vec::new(),
+        pixels: pixels.into_boxed_slice(),
     })
 }
 
