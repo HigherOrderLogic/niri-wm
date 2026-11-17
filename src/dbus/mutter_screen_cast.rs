@@ -90,6 +90,15 @@ struct StreamParameters {
     size: (i32, i32),
 }
 
+#[derive(Debug, SerializeDict, Type)]
+#[zvariant(signature = "dict")]
+pub struct PipeWireStreamProperties {
+    #[zvariant(rename = "node-id")]
+    pub node_id: u32,
+    #[zvariant(rename = "node-serial")]
+    pub node_serial: u64,
+}
+
 pub enum ScreenCastToNiri {
     StartCast {
         session_id: CastSessionId,
@@ -139,7 +148,7 @@ impl ScreenCast {
 
     #[zbus(property)]
     async fn version(&self) -> i32 {
-        4
+        5
     }
 }
 
@@ -282,6 +291,12 @@ impl Stream {
     #[zbus(signal)]
     pub async fn pipe_wire_stream_added(ctxt: &SignalEmitter<'_>, node_id: u32)
         -> zbus::Result<()>;
+
+    #[zbus(signal)]
+    pub async fn pipe_wire_stream_added_v2(
+        ctxt: &SignalEmitter<'_>,
+        properties: PipeWireStreamProperties,
+    ) -> zbus::Result<()>;
 
     #[zbus(property)]
     async fn parameters(&self) -> StreamParameters {

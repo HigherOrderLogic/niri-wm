@@ -31,7 +31,9 @@ use pipewire::spa::utils::{
 };
 use pipewire::spa::{self};
 use pipewire::stream::{Stream, StreamFlags, StreamListener, StreamRc, StreamState};
-use pipewire::sys::{pw_buffer, pw_check_library_version, pw_stream_queue_buffer};
+use pipewire::sys::{
+    pw_buffer, pw_check_library_version, pw_stream_queue_buffer, PW_KEY_OBJECT_SERIAL,
+};
 use smithay::backend::allocator::dmabuf::{AsDmabuf, Dmabuf};
 use smithay::backend::allocator::format::FormatSet;
 use smithay::backend::allocator::gbm::{GbmBuffer, GbmBufferFlags, GbmDevice};
@@ -53,7 +55,7 @@ use smithay::reexports::rustix::fs::{
 use smithay::utils::{DeviceFd, Logical, Physical, Point, Scale, Size, Transform};
 use zbus::object_server::SignalEmitter;
 
-use crate::dbus::mutter_screen_cast::{self, CursorMode};
+use crate::dbus::mutter_screen_cast::{self, CursorMode, PipeWireStreamProperties};
 use crate::niri::{CastTarget, State};
 use crate::render_helpers::{
     clear_dmabuf, encompassing_geo, render_and_download, render_and_download_with_damage,
@@ -480,8 +482,15 @@ impl PipeWire {
                             StreamState::Paused => {
                                 if inner.node_id.is_none() {
                                     let id = stream.node_id();
+                                    let serial = stream
+                                        .properties()
+                                        .get(str::from_utf8(PW_KEY_OBJECT_SERIAL).unwrap())
+                                        .and_then(|s| s.parse().ok())
+                                        .unwrap_or(0);
+
                                     inner.node_id = Some(id);
-                                    debug!("sending signal with {id}");
+
+                                    debug!("sending signal with {id}, serial {serial}");
 
                                     let _span = tracy_client::span!("sending PipeWireStreamAdded");
                                     async_io::block_on(async {
@@ -491,9 +500,29 @@ impl PipeWire {
                                                 id,
                                             )
                                             .await;
+                                        let v1_failed = res.is_err();
 
                                         if let Err(err) = res {
                                             warn!("error sending PipeWireStreamAdded: {err:?}");
+                                        }
+
+                                        let props = PipeWireStreamProperties {
+                                            node_id: id,
+                                            node_serial: serial,
+                                        };
+                                        let res =
+                                            mutter_screen_cast::Stream::pipe_wire_stream_added_v2(
+                                                &signal_ctx,
+                                                props,
+                                            )
+                                            .await;
+                                        let v2_failed = res.is_err();
+
+                                        if let Err(err) = res {
+                                            warn!("error sending PipeWireStreamAddedV2: {err:?}");
+                                        }
+
+                                        if v1_failed && v2_failed {
                                             stop_cast();
                                         }
                                     });
